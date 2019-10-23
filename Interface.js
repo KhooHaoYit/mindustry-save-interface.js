@@ -345,6 +345,14 @@ const save = {
                         output[x][y].block = block;
                     }
                     break;
+                case 'graphite-press':
+                    {
+                        const block = io.readChunk(save.readEntity, true, true, false, false, true);
+                        block.progress = io.readFloat();
+                        block.warmup = io.readFloat();
+                        output[x][y].block = block;
+                    }
+                    break;
                 case 'alloy-smelter':
                 case 'silicon-smelter':
                 case 'blast-mixer':
@@ -379,6 +387,7 @@ const save = {
                         output[x][y].block = block;
                     }
                     break;
+                case 'turbine-generator':
                 case 'differential-generator':
                     {
                         const block = io.readChunk(save.readEntity, true, true, true, true, true);
@@ -417,6 +426,7 @@ const save = {
                     }
                     break;
                 case 'arc':
+                case 'lancer':
                     {
                         const block = io.readChunk(save.readEntity, true, false, true, true, true);
                         output[x][y].block = block;
@@ -517,6 +527,7 @@ const save = {
                 case 'draug-factory':
                 case 'phantom-factory':
                 case 'titan-factory':
+                case 'wraith-factory':
                 case 'crawler-factory':
                 case 'fortress-factory':
                 case 'spirit-factory':
@@ -538,7 +549,7 @@ const save = {
                 case 'titanium-wall':
                 case 'titanium-wall-large':
                 case 'phase-wall':
-                case 'phase-wall-laarge':
+                case 'phase-wall-large':
                 case 'copper-wall':
                 case 'copper-wall-large':
                     {
@@ -589,6 +600,8 @@ const save = {
                 case 'part_0_-1': case 'part_0_1': case 'part_0_2':
                 case 'part_1_-1': case 'part_1_0': case 'part_1_1': case 'part_1_2':
                 case 'part_2_-1': case 'part_2_0': case 'part_2_1': case 'part_2_2':
+                case 'part_-3_-2':
+                case 'part_4_4':
                 case 'cliffs':
                 case 'sand-boulder':
                 case 'sandrocks':
@@ -600,6 +613,7 @@ const save = {
                 case 'snowrock':
                 case 'pine':
                 case 'snow-pine':
+                case 'shrubs':
                 case 'air':
                     {
                         let consecutives = io.readUByte();
@@ -652,8 +666,8 @@ const save = {
         output.saved = BigInt(output.saved);
         output.playtime = BigInt(output.playtime);
         output.wavetime = parseFloat(output.wave);
-        output.stats = JSON.parse(util.replaceAdvanced(output.stats, /[a-zA-Z\-]+(?=:)/, '"'));
-        output.rules = JSON.parse(util.replaceAdvanced(output.rules, /[a-zA-Z\-]+(?=:)/, '"', '"', ['true', 'false']));
+        output.stats = JSON.parse(util.replaceAdvanced(output.stats, /[a-zA-Z\-]+(?=[:,{}])/, '"'));
+        output.rules = JSON.parse(util.replaceAdvanced(output.rules, /[a-zA-Z\-]+(?=[:,{}])/, '"', '"', ['true', 'false']));
         if (!output.rules.spawns) output.rules.spawns = [
             { "type": "dagger", "end": 10, "scaling": 2 },
             { "type": "crawler", "begin": 4, "end": 13, "scaling": 1.5, "amount": 2 },
