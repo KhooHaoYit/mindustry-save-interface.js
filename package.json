@@ -1,0 +1,26 @@
+{
+  "name": "mindustry-save-interface",
+  "version": "1.0.0",
+  "description": "Reads & Write the Mindustry saves files",
+  "main": "Interface.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KhooHaoYit/mindustry-save-interface.js.git"
+  },
+  "keywords": [
+    "Mindustry",
+    "save",
+    "write",
+    "read",
+    "interface"
+  ],
+  "author": "KhooHaoYit & Loxoz",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/KhooHaoYit/mindustry-save-interface.js/issues"
+  },
+  "homepage": "https://github.com/KhooHaoYit/mindustry-save-interface.js#readme"
+}
