@@ -400,12 +400,17 @@ const IOHelper = class IOHelper {
         return output;
     }
 
+    skipChunk (isByte = false) {
+        const size = isByte ? this.readUShort() : this.readInt();
+        this.counter += size;
+    }
+
     writeChunk (callbacks, isByte = false, ...args) {
         const before = this.bufferUsed.length;
         if(isByte) this.writeUShort(0);
         else this.writeInt(0);
 
-        if(Array.isArray(callbacks))callbacks.forEach(callback => callback(...args));
+        if(Array.isArray(callbacks)) callbacks.forEach(callback => callback(...args));
         else callbacks(...args);
 
         if(isByte) this.buffer.writeUInt16BE(this.bufferUsed.length - before - 2, before);

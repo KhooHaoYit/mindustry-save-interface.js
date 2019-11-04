@@ -4,7 +4,8 @@
   "description": "Reads & Write the Mindustry saves files",
   "main": "Interface.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "start": "node Interface.js"
   },
   "repository": {
     "type": "git",

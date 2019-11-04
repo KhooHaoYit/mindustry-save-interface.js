@@ -5,6 +5,7 @@
 
 const util = require('./util.js');
 const IOHelper = require('./IOHelper.js');
+const mapHandler = require('./mapHandler.js');
 
 var io = new IOHelper();
 
@@ -140,7 +141,7 @@ const SaveIO = class SaveIO {
 
     writeEntities(entities) {
         let groups = 0;
-        entities.forEach(value => value === undefined || ++groups);
+        entities.forEach(value => groups += Array.isArray(value));
         io.writeByte(groups);
         entities.forEach(entities => {
             io.writeInt(entities.length);
@@ -225,919 +226,6 @@ const SaveIO = class SaveIO {
         return output;
     }
 
-    writeEntity(entity) {
-        io.writeByte(entity.version);
-        io.writeUShort(entity.health);
-        io.writeByte(entity.team << 4 | entity.rotation);
-        if(entity.items !== undefined){
-            io.writeByte(entity.items.length);
-            entity.items.forEach(item => {
-                io.writeByte(item.itemId);
-                io.writeInt(item.itemAmount);
-            });
-        }
-        if(entity.power !== undefined){
-            io.writeShort(entity.power.links.length);
-            entity.power.links.forEach(link => io.writeInt(link));
-            io.writeFloat(entity.power.satisfaction);
-        }
-        if(entity.liquids !== undefined){
-            io.writeByte(entity.liquids.length);
-            entity.liquids.forEach(liquid => {
-                io.writeByte(liquid.liquidId);
-                io.writeFloat(liquid.amount);
-            });
-        }
-        if(entity.consume !== undefined) io.writeBoolean(entity.consume);
-    }
-
-    readMap(mapper) {
-        const width = io.readUShort();
-        const height = io.readUShort();
-        const output = [];
-        for (let fill = height; fill; output[--fill] = []);
-        const size = width * height;
-        //read floor and create tiles first
-        for (let i = 0; i < size; ++i) {
-            const x = i % width, y = Math.floor(i / width);
-            const floorId = io.readShort();
-            const oreId = io.readShort();
-            let consecutives = io.readUByte();
-            output[x][y] = { floorId, oreId };
-            //This loop basically fill x amount of same thing
-            for (let j = i + 1; j < i + 1 + consecutives; j++) {
-                let newx = j % width, newy = Math.floor(j / width);
-                output[newx][newy] = { floorId, oreId };
-            }
-            i += consecutives;
-        }
-        
-        //read blocks
-        for (let i = 0; i < size; ++i) {
-            const x = i % width, y = Math.floor(i / width);
-            const blockId = io.readShort();
-            output[x][y].blockId = blockId;
-            switch (mapper[1][blockId]) {
-                case 'build1':
-                case 'build2':
-                case 'build3':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.pid = io.readShort();
-                            block.rid = io.readShort();
-                            let acsize = io.readByte();
-                            if (acsize != -1) {
-                                const accumulator = [];
-                                const totalAccumulator = [];
-                                do {
-                                    accumulator.push(io.readFloat());
-                                    totalAccumulator.push(io.readFloat());
-                                } while (--acsize);
-                                block.accumulator = { accumulator, totalAccumulator }
-                            }
-                            //  BuildBlock.java:348
-                            //let previous;
-                            //let cblock;
-                            //let buildCost;
-                            //if(pid != -1) previous = mapper[1][pid];
-                            //if(rid != -1) cblock = mapper[1][rid];
-                            //if(cblock != null) buildCost = cblock.buildCost * state.rules.buildCostMultiplier;
-                            //else buildCost = 20;
-                            return block;
-                        }
-                    ], true, false, false, false, true);
-                    break;
-                case 'container':
-                case 'vault':
-                case 'command-center':
-                case 'core-shard':
-                    output[x][y].block = io.readChunk(this.readEntity, true, true, false, false, true);
-                    break;
-                case 'battery':
-                case 'surge-tower':
-                case 'battery-large':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, false, true);
-                    break;
-                case 'incinerator':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, true, true);
-                    break;
-                case 'force-projector':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.broken = io.readBoolean();
-                            block.buildup = io.readFloat();
-                            block.radscl = io.readFloat();
-                            block.warmup = io.readFloat();
-                            block.phaseHeat = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, true, true);
-                    break;
-                case 'phase-conveyor':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.link = io.readInt();
-                            block.uptime = io.readFloat();
-                            const links = [];
-                            for (let linksAmount = io.readByte(); linksAmount; --linksAmount) {
-                                const add = io.readInt();
-                                links.push(add);
-                            }
-                            block.links = links;
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'mass-driver':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.link = io.readInt();
-                            block.rotationDriver = io.readFloat();
-                            block.stateId = io.readByte();
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'junction':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            const indexes = [];
-                            const buffers = [];
-                            for (let i = 4; i; --i) {
-                                const index = io.readByte();
-                                indexes.push(index);
-                                const buffer = [];
-                                for (let length = io.readByte(); length; --length) {
-                                    const value = io.readLong();
-                                    buffer.push(value);
-                                    //DirectionalItemBuffer.java:65
-                                }
-                                buffers.push(buffer);
-                            }
-                            block.indexes = indexes;
-                            block.buffers = buffers;
-                            return block;
-                        }
-                    ], true, false, false, false, true);
-                    break;
-                case 'overflow-gate':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            if (block.version == 1) throw new Error("Haven't implement yet, see OverflowGate.java:135");
-                            return block;
-                        }
-                    ], true, true, false, false, true);
-                    break;
-                case 'router':
-                case 'distributor':
-                    output[x][y].block = io.readChunk(this.readEntity, true, true, false, false, true);
-                    break;
-                case 'sorter':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.sortItemId = io.readShort();
-                            if (block.revision == 1) throw new Error("Haven't implement yet, see Sorter.java:155");
-                            return block;
-                        }
-                    ], true, false, false, false, true);
-                    break;
-                case 'bridge-conveyor':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.link = io.readInt();
-                            block.uptime = io.readFloat();
-                            const links = [];
-                            for (let linksAmount = io.readByte(); linksAmount; --linksAmount) {
-                                const add = io.readInt();
-                                links.push(add);
-                            }
-                            block.links = links;
-                            const index = io.readByte();
-                            const buffer = [];
-                            for (let length = io.readByte(); length; --length) {
-                                buffer.push(io.readLong());	//ItemBuffer.java:76
-                            }
-                            block.buffer = { index, buffer };
-                            return block;
-                        }
-                    ], true, true, false, false, true);
-                    break;
-                case 'titanium-conveyor':
-                case 'conveyor':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            const buffer = [];
-                            for (let amount = io.readInt(); amount; --amount) {
-                                const data = io.readUInt();
-                                //Conveyor.java:447
-                                //TODO: Check what it does
-                                buffer.push(data);
-                            }
-                            block.buffer = buffer;
-                            return block;
-                        }
-                    ], true, true, false, false, true);
-                    break;
-                case 'phase-weaver':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.warmup = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'multi-press':
-                case 'cryofluidmixer':
-                case 'coal-centrifuge':
-                case 'spore-press':
-                case 'plastanium-compressor':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.warmup = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, true, true);
-                    break;
-                case 'graphite-press':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.warmup = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, false, false, true);
-                    break;
-                case 'alloy-smelter':
-                case 'silicon-smelter':
-                case 'blast-mixer':
-                case 'pyratite-mixer':
-                case 'kiln':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.warmup = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'cultivator':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.warmup = io.readFloat();
-                            block.warmup = io.readFloat();	//This is probably a mistake
-                            return block;
-                        }
-                    ], true, true, true, true, true);
-                    break;
-                case 'meltdown':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, true, true);
-                    break;
-                case 'rtg-generator':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.productionEfficiency = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'turbine-generator':
-                case 'differential-generator':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.productionEfficiency = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, true, true);
-                    break;
-                case 'solar-panel':
-                case 'solar-panel-large':
-                case 'thermal-generator':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.productionEfficiency = io.readFloat();
-                            return block;
-                        }
-                    ], true, false, true, false, true);
-                    break;
-                case 'impact-reactor':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.productionEfficiency = io.readFloat();
-                            block.warmUp = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, true, true);
-                    break;
-                case 'power-node-large':
-                case 'power-node':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, false, true);
-                    break;
-                case 'wave':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, false, true, true);
-                    break;
-                case 'arc':
-                case 'lancer':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, true, true);
-                    break;
-                case 'salvo':
-                case 'duo':
-                case 'spectre':
-                case 'fuse':
-                case 'ripple':
-                case 'scorch':
-                case 'cyclone':
-                case 'swarmer':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            const items = [];
-                            for (let amount = io.readByte(); amount; --amount) {
-                                const itemId = io.readByte();
-                                const ammo = io.readShort();
-                                items.push({ itemId, ammo });
-                            }
-                            block.items = items;
-                            return block;
-                        }
-                    ], true, true, false, true, true);
-                    break;
-                case 'phase-conduit':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.link = io.readInt();
-                            block.uptime = io.readFloat();
-                            const links = [];
-                            for (let linksAmount = io.readByte(); linksAmount; --linksAmount) {
-                                const add = io.readInt();
-                                links.push(add);
-                            }
-                            block.links = links;
-                            return block;
-                        }
-                    ], true, false, true, true, true);
-                    break;
-                case 'bridge-conduit':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.link = io.readInt();
-                            block.uptime = io.readFloat();
-                            const links = [];
-                            for (let linksAmount = io.readByte(); linksAmount; --linksAmount) {
-                                const add = io.readInt();
-                                links.push(add);
-                            }
-                            block.links = links;
-                            return block;
-                        }
-                    ], true, false, false, true, true);
-                    break;
-                case 'liquid-tank':
-                case 'liquid-junction':
-                case 'mechanical-pump':
-                case 'pulse-conduit':
-                case 'liquid-router':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, false, true, true);
-                    break;
-                case 'overdrive-projector':
-                case 'mender':
-                case 'mend-projector':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.heat = io.readFloat();
-                            block.phaseHeat = io.readFloat();
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'unloader':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.itemId = io.readByte();
-                            return block;
-                        }
-                    ], true, true, false, false, true);
-                    break;
-                case 'tau-mech-pad':
-                case 'omega-mech-pad':
-                case 'delta-mech-pad':
-                case 'dart-mech-pad':
-
-                case 'glaive-ship-pad':
-                case 'javelin-ship-pad':
-                case 'trident-ship-pad':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.progress = io.readFloat();
-                            block.time = io.readFloat();
-                            block.heat = io.readFloat();
-                            return block;
-                        }
-                    ], true, false, true, false, true);
-                    break;
-                case 'revenant-factory':
-                case 'draug-factory':
-                case 'phantom-factory':
-                case 'titan-factory':
-                case 'wraith-factory':
-                case 'crawler-factory':
-                case 'fortress-factory':
-                case 'spirit-factory':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.buildTime = io.readFloat();
-                            block.spawned = io.readInt();
-                            return block;
-                        }
-                    ], true, true, true, false, true);
-                    break;
-                case 'shock-mine':
-
-                case 'scrap-wall':
-                case 'scrap-wall-large':
-                case 'thorium-wall':
-                case 'thorium-wall-large':
-                case 'surge-wall':
-                case 'surge-wall-large':
-                case 'titanium-wall':
-                case 'titanium-wall-large':
-                case 'phase-wall':
-                case 'phase-wall-large':
-                case 'copper-wall':
-                case 'copper-wall-large':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, false, false, true);
-                    break;
-                case 'door':
-                    output[x][y].block = io.readChunk([
-                        this.readEntity,
-                        () => {
-                            const block = {};
-                            block.open = io.readBoolean();
-                            return block;
-                        }
-                    ], true, false, false, false, true);
-                    break;
-                case 'pneumatic-drill':
-                case 'mechanical-drill':
-                    output[x][y].block = io.readChunk(this.readEntity, true, true, false, true, true);
-                    break;
-                case 'oil-extractor':
-                case 'laser-drill':
-                case 'blast-drill':
-                    output[x][y].block = io.readChunk(this.readEntity, true, true, true, true, true);
-                    break;
-                case 'water-extractor':
-
-                case 'rotary-pump':
-                case 'thermal-pump':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, true, true);
-                    break;
-                case 'repair-point':
-                    output[x][y].block = io.readChunk(this.readEntity, true, false, true, false, true);
-                    break;
-                default:
-                    throw new Error(`${mapper[1][blockId]} (${blockId}) at ${i} is not mapped!! SaveVersion.java:183`);
-                case 'part_-1_-1': case 'part_-1_0': case 'part_-1_1': case 'part_-1_2':
-                case 'part_0_-1': case 'part_0_1': case 'part_0_2':
-                case 'part_1_-1': case 'part_1_0': case 'part_1_1': case 'part_1_2':
-                case 'part_2_-1': case 'part_2_0': case 'part_2_1': case 'part_2_2':
-                case 'part_-3_-2':
-                case 'part_4_4':
-                case 'cliffs':
-                case 'sand-boulder':
-                case 'sandrocks':
-                case 'snowrocks':
-                case 'icerocks':
-                case 'dunerocks':
-                case 'rocks':
-                case 'rock':
-                case 'snowrock':
-                case 'pine':
-                case 'snow-pine':
-                case 'shrubs':
-                case 'air':
-                    {
-                        let consecutives = io.readUByte();
-                        //This loop basically fill x amount of same thing
-                        for (let j = i + 1; j < i + 1 + consecutives; j++) {
-                            let newx = j % width, newy = Math.floor(j / width);
-                            output[newx][newy].blockId = blockId;
-                        }
-                        i += consecutives;
-                        break;
-                    }
-            }
-        }
-        return output;
-    }
-
-    writeMap(value, mapper) {
-        const width = value.length;
-        const height = value.length;
-        const size = width * height;
-        io.writeUShort(width);
-        io.writeUShort(height);
-
-        console.time('map.tile.floor');
-        for (let i = 0; i < size; ++i) {
-            const x = i % width, y = Math.floor(i / width);
-            const tile = value[x][y];
-            
-            io.writeShort(tile.floorId);
-            io.writeShort(tile.oreId);
-            
-            let consecutives = 0;
-            for(let j = i + 1; j < size && consecutives <= 255; ++j, ++consecutives){
-                const nextTile = value[j % width][Math.floor(j / width)];
-                if(nextTile.floorId != tile.blockId || nextTile.oreId != tile.oreId) break;
-            }
-            io.writeUByte(consecutives);
-            i += consecutives;
-        }
-        console.timeEnd('map.tile.floor');
-
-        console.time('map.tile.block');
-        for (let i = 0; i < size; ++i) {
-            const x = i % width, y = Math.floor(i / width);
-            const tile = value[x][y];
-            const block = tile.block;
-            const blockId = tile.blockId;
-            io.writeShort(blockId);
-            switch (mapper[1][blockId]) {
-                case 'overflow-gate':
-                    if (block.version == 1) throw new Error("Haven't implement yet, see OverflowGate.java:135");
-                case 'router':
-                case 'distributor':
-                case 'incinerator':
-                case 'battery':
-                case 'surge-tower':
-                case 'battery-large':
-                case 'container':
-                case 'vault':
-                case 'command-center':
-                case 'core-shard':
-                case 'shock-mine':
-                case 'scrap-wall':
-                case 'scrap-wall-large':
-                case 'thorium-wall':
-                case 'thorium-wall-large':
-                case 'surge-wall':
-                case 'surge-wall-large':
-                case 'titanium-wall':
-                case 'titanium-wall-large':
-                case 'phase-wall':
-                case 'phase-wall-large':
-                case 'copper-wall':
-                case 'copper-wall-large':
-                case 'pneumatic-drill':
-                case 'mechanical-drill':
-                case 'oil-extractor':
-                case 'laser-drill':
-                case 'blast-drill':
-                case 'water-extractor':
-                case 'rotary-pump':
-                case 'thermal-pump':
-                case 'repair-point':
-                case 'power-node-large':
-                case 'power-node':
-                case 'meltdown':
-                case 'wave':
-                case 'arc':
-                case 'lancer':
-                case 'liquid-tank':
-                case 'liquid-junction':
-                case 'mechanical-pump':
-                case 'pulse-conduit':
-                case 'liquid-router':
-                    io.writeChunk(this.writeEntity, true, block);
-                    break;
-                case 'build1':
-                case 'build2':
-                case 'build3':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.progress);
-                            io.writeShort(block.pid);
-                            io.writeShort(block.rid);
-                            if(block.accumulator){
-                                io.writeByte(block.accumulator.accumulator.length);
-                                for(let loop = 0, limit = block.accumulator.accumulator.length; loop < limit; ++loop){
-                                    io.writeFloat(block.accumulator.accumulator[loop]);
-                                    io.writeFloat(block.accumulator.totalAccumulator[loop]);
-                                }
-                            }
-                            else io.writeByte(-1);
-                        }
-                    ], true, block);
-                    break;
-                case 'force-projector':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeBoolean(block.broken);
-                            io.writeFloat(block.buildup);
-                            io.writeFloat(block.radscl);
-                            io.writeFloat(block.warmup);
-                            io.writeFloat(block.phaseHeat);
-                        }
-                    ], true, block);
-                    break;
-                case 'phase-conveyor':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeInt(block.link);
-                            io.writeFloat(block.uptime);
-                            io.writeByte(block.links.length);
-                            block.links.forEach(link => io.writeInt(link));
-                        }
-                    ], true, block);
-                    break;
-                case 'mass-driver':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeInt(block.link);
-                            io.writeFloat(block.rotationDriver);
-                            io.writeByte(block.stateId);
-                        }
-                    ], true, block);
-                    break;
-                case 'junction':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            for (let i = 0; i < 4; ++i) {
-                                io.writeByte(block.indexes[i]);
-                                io.writeByte(block.buffers[i].length);
-                                block.buffers[i].forEach(buffer => io.writeLong(buffer));
-                            }
-                        }
-                    ], true, block);
-                    break;
-                case 'sorter':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            if (block.revision == 1) throw new Error("Haven't implement yet, see Sorter.java:155");
-                            io.writeShort(block.sortItemId);
-                        }
-                    ], true, block);
-                    break;
-                case 'bridge-conveyor':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeInt(block.link);
-                            io.writeFloat(block.uptime);
-                            io.writeByte(block.links.length);
-                            block.links.forEach(link => io.writeInt(link));
-                            io.writeByte(block.buffer.index);
-                            io.writeByte(block.buffer.buffer.length);
-                            block.buffer.buffer.forEach(buffer => io.writeLong(buffer));
-                        }
-                    ], true, block);
-                    break;
-                case 'titanium-conveyor':
-                case 'conveyor':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeInt(block.buffer.length);
-                            block.buffer.forEach(buffer => io.writeUInt(buffer));
-                        }
-                    ], true, block);
-                    break;
-                case 'alloy-smelter':
-                case 'silicon-smelter':
-                case 'blast-mixer':
-                case 'pyratite-mixer':
-                case 'kiln':
-                case 'graphite-press':
-                case 'multi-press':
-                case 'cryofluidmixer':
-                case 'coal-centrifuge':
-                case 'spore-press':
-                case 'plastanium-compressor':
-                case 'phase-weaver':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.progress);
-                            io.writeFloat(block.warmup);
-                        }
-                    ], true, block);
-                    break;
-                case 'cultivator':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.progress);
-                            io.writeFloat(block.warmup);
-                            io.writeFloat(block.warmup);	//This is probably a mistake
-                        }
-                    ], true, block);
-                    break;
-                case 'solar-panel':
-                case 'solar-panel-large':
-                case 'thermal-generator':
-                case 'turbine-generator':
-                case 'differential-generator':
-                case 'rtg-generator':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.productionEfficiency);
-                        }
-                    ], true, block);
-                    break;
-                case 'impact-reactor':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.productionEfficiency);
-                            io.writeFloat(block.warmup);
-                        }
-                    ], true, block);
-                    break;
-                case 'salvo':
-                case 'duo':
-                case 'spectre':
-                case 'fuse':
-                case 'ripple':
-                case 'scorch':
-                case 'cyclone':
-                case 'swarmer':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeByte(block.items.length);
-                            block.items.forEach(item => {
-                                io.writeByte(item.itemId);
-                                io.writeShort(item.ammo);
-                            });
-                        }
-                    ], true, block);
-                    break;
-                case 'bridge-conduit':
-                case 'phase-conduit':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeInt(block.link);
-                            io.writeFloat(block.uptime);
-                            io.writeByte(block.links.length);
-                            block.links.forEach(link => io.writeInt(link));
-                        }
-                    ], true, block);
-                    break;
-                case 'overdrive-projector':
-                case 'mender':
-                case 'mend-projector':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.heat);
-                            io.writeFloat(block.phaseHeat);
-                        }
-                    ], true, block);
-                    break;
-                case 'unloader':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeByte(block.itemId);
-                        }
-                    ], true, block);
-                    break;
-                case 'tau-mech-pad':
-                case 'omega-mech-pad':
-                case 'delta-mech-pad':
-                case 'dart-mech-pad':
-    
-                case 'glaive-ship-pad':
-                case 'javelin-ship-pad':
-                case 'trident-ship-pad':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.progress);
-                            io.writeFloat(block.time);
-                            io.writeFloat(block.heat);
-                        }
-                    ], true, block);
-                    break;
-                case 'revenant-factory':
-                case 'draug-factory':
-                case 'phantom-factory':
-                case 'titan-factory':
-                case 'wraith-factory':
-                case 'crawler-factory':
-                case 'fortress-factory':
-                case 'spirit-factory':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeFloat(block.buildTime);
-                            io.writeInt(block.spawned);
-                        }
-                    ], true, block);
-                    break;
-                case 'door':
-                    io.writeChunk([
-                        this.writeEntity,
-                        block => {
-                            io.writeBoolean(block.open);
-                        }
-                    ], true, block);
-                    break;
-                default:
-                    throw new Error(`${mapper[1][blockId]} (${blockId}) is not mapped!! SaveVersion.java:183`);
-                case 'part_-1_-1': case 'part_-1_0': case 'part_-1_1': case 'part_-1_2':
-                case 'part_0_-1': case 'part_0_1': case 'part_0_2':
-                case 'part_1_-1': case 'part_1_0': case 'part_1_1': case 'part_1_2':
-                case 'part_2_-1': case 'part_2_0': case 'part_2_1': case 'part_2_2':
-                case 'part_-3_-2':
-                case 'part_4_4':
-                case 'cliffs':
-                case 'sand-boulder':
-                case 'sandrocks':
-                case 'snowrocks':
-                case 'icerocks':
-                case 'dunerocks':
-                case 'rocks':
-                case 'rock':
-                case 'snowrock':
-                case 'pine':
-                case 'snow-pine':
-                case 'shrubs':
-                case 'air':
-                    {
-                        let consecutives = 0;
-                        for(let j = i + 1; j < size && consecutives < 255; ++j, ++consecutives){
-                            if(value[j % width][Math.floor(j / width)].blockId != blockId) break;
-                        }
-                        io.writeUByte(consecutives);
-                        i += consecutives;
-                    }
-            }
-        }
-        console.timeEnd('map.tile.block');
-    }
-
     /*
     0	item
     1	block
@@ -1158,8 +246,7 @@ const SaveIO = class SaveIO {
         for (; mapped; --mapped) {
             const type = io.readByte();
             output[type] = [];
-            let total = io.readShort()
-            for (; total; --total) {
+            for (let total = io.readShort(); total; --total) {
                 const name = io.readUTF();
                 output[type].push(name);
             }
@@ -1175,7 +262,7 @@ const SaveIO = class SaveIO {
             if(value[key] === undefined) continue;
             io.writeByte(key);
             io.writeShort(value[key].length);
-            value[key].forEach(value => io.writeUTF(value));
+            value[key].forEach(name => io.writeUTF(name));
         }
     }
 
@@ -1187,7 +274,7 @@ const SaveIO = class SaveIO {
         output.height = BigInt(output.height);
         output.saved = BigInt(output.saved);
         output.playtime = BigInt(output.playtime);
-        output.wavetime = parseFloat(output.wave);
+        output.wavetime = parseFloat(output.wavetime);
         output.stats = JSON.parse(
             util.replaceAdvanced(output.stats, /[a-zA-Z\-]+(?=[:,{}])/, found => `"${found}"`)
         );
@@ -1241,26 +328,48 @@ const SaveIO = class SaveIO {
         io.writeStringMap(value);
     }
 
-    decode(buffer) {
-        io.reset();
-        io.bufferSet(buffer);
-        const info = {};
+    decode(buffer = null) {
+        console.group('decode');
+        console.time('decode');
 
+        io.reset();
+        if(Buffer.isBuffer(buffer)) io.bufferSet(buffer);
+        const info = {};
         info.header = this.readHeader();
         if (info.header != 'MSAV') throw new Error('Incorrect header');
         info.version = io.readInt();
-        info.meta = io.readChunk(this.readMeta.bind(this));
-        info.content = io.readChunk(this.readContentHeader.bind(this));
-        info.map = io.readChunk(this.readMap.bind(this), false, info.content);
-        info.entities = io.readChunk(this.readEntities.bind(this));
 
+        console.time('meta');
+        info.meta = io.readChunk(this.readMeta.bind(this));
+        console.timeEnd('meta');
+
+        console.time('content');
+        info.content = io.readChunk(this.readContentHeader.bind(this));
+        console.timeEnd('content');
+
+        console.time('map');
+        console.group('map');
+        info.map = new mapHandler(io);
+        io.readChunk(mapper => {
+            info.map.decode(mapper);
+        }, false, info.content);
+        console.groupEnd();
+        console.timeEnd('map');
+
+        console.time('entities');
+        info.entities = io.readChunk(this.readEntities.bind(this));
+        console.timeEnd('entities');
+
+        console.timeEnd('decode');
+        console.groupEnd();
         return info;
     }
 
     encode(info, preAlloc = 0xffffff) {
-        io.bufferClear(preAlloc);
         console.group('encode');
-        
+        console.time('decode');
+        io.bufferClear(preAlloc);
+
         io.reset();
         this.writeHeader();
         io.writeInt(info.version);
@@ -1275,45 +384,19 @@ const SaveIO = class SaveIO {
 
         console.time('map');
         console.group('map');
-        io.writeChunk(this.writeMap.bind(this), false, info.map, info.content);
+        io.writeChunk(mapper => {
+            info.map.encode(mapper);
+        }, false, info.content);
         console.groupEnd();
         console.timeEnd('map');
 
         console.time('entities');
         io.writeChunk(this.writeEntities.bind(this), false, info.entities);
         console.timeEnd('entities');
-        
+
+        console.timeEnd('decode');
         console.groupEnd();
         return;
-    }
-
-    test() {
-        console.group('decode');
-        
-        io.reset();
-        const info = {};
-        info.header = this.readHeader();
-        if (info.header != 'MSAV') throw new Error('Incorrect header');
-        info.version = io.readInt();
-        
-        console.time('meta');
-        info.meta = io.readChunk(this.readMeta.bind(this));
-        console.timeEnd('meta');
-        
-        console.time('content');
-        info.content = io.readChunk(this.readContentHeader.bind(this));
-        console.timeEnd('content');
-        
-        console.time('map');
-        info.map = io.readChunk(this.readMap.bind(this), false, info.content);
-        console.timeEnd('map');
-        
-        console.time('entities');
-        info.entities = io.readChunk(this.readEntities.bind(this));
-        console.timeEnd('entities');
-        
-        console.groupEnd();
-        return info;
     }
 }
 
